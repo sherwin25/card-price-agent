@@ -4,126 +4,78 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import * as cheerio from "cheerio";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+/**
+ * NOTE:
+ * This version is deterministic: it ONLY uses eBay SOLD results (public HTML) and does NOT call the OpenAI API.
+ * Result: no hallucinated URLs, better price reliability for portfolio/demo.
+ * Later, you can re-add Tavily + LLM extraction as an optional fallback.
+ */
 
-type SearchResult = { title: string; url: string };
+/* ----------------------------- Types & Helpers ---------------------------- */
+
 type Sale = {
-  source: string;
+  source: "ebay";
   title: string;
   price: number;
-  currency: string;
+  currency: "USD";
   url: string;
-  soldAt: string;
+  soldAt: string; // ISO date if known
   shipping?: number;
 };
 
-type TavilyResult = { title: string; url: string };
-type ModelSalePayload = {
-  source?: unknown;
-  title?: unknown;
-  price?: unknown;
-  currency?: unknown;
-  url?: unknown;
-  soldAt?: unknown;
-  shipping?: unknown;
-};
-type ModelResponsePayload = {
-  sales?: ModelSalePayload[];
-  citations?: unknown;
-};
-
-function safeJson<T>(s: string | undefined | null): T | null {
-  if (!s) return null;
-  const trimmed = s
-    .trim()
-    .replace(/^```json\s*/i, "")
-    .replace(/```$/i, "");
-  try {
-    const start = trimmed.indexOf("{");
-    if (start >= 0) return JSON.parse(trimmed.slice(start)) as T;
-    return JSON.parse(trimmed) as T;
-  } catch {
-    return null;
-  }
+function parsePrice(text: string): number | null {
+  if (!text) return null;
+  // Accept forms like "$199.99", "US $199.99", "$199", etc.
+  const m = text.replace(/\s+/g, " ").match(/\$?\s*([\d,]+(\.\d{1,2})?)/i);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return null;
+  return n;
 }
 
-function parseSearchResults(results: unknown): SearchResult[] {
-  if (!Array.isArray(results)) return [];
-  return results
-    .filter((item): item is TavilyResult => {
-      if (!item || typeof item !== "object") return false;
-      const candidate = item as Record<string, unknown>;
-      return (
-        typeof candidate.title === "string" && typeof candidate.url === "string"
-      );
-    })
-    .map(({ title, url }) => ({ title, url }));
+function parseUsd(text: string): boolean {
+  if (!text) return false;
+  // We only keep USD results to avoid FX issues.
+  return /\bUS\b|\$/.test(text);
 }
 
-function normalizeSale(raw: ModelSalePayload): Sale | null {
-  if (
-    typeof raw?.title !== "string" ||
-    typeof raw?.url !== "string" ||
-    raw.price === undefined
-  ) {
-    return null;
-  }
-
-  const price = Number(raw.price);
-  if (!Number.isFinite(price)) {
-    return null;
-  }
-
-  const shippingValue =
-    raw.shipping === undefined || raw.shipping === null
-      ? 0
-      : Number(raw.shipping);
-  const shipping = Number.isFinite(shippingValue) ? shippingValue : 0;
-
-  return {
-    source: typeof raw.source === "string" ? raw.source : "web",
-    title: raw.title,
-    price,
-    currency: typeof raw.currency === "string" ? raw.currency : "USD",
-    url: raw.url,
-    soldAt:
-      typeof raw.soldAt === "string"
-        ? raw.soldAt
-        : new Date().toISOString(),
-    shipping,
-  };
+function parseSoldDate(text: string): string | "" {
+  // eBay often shows: "Sold Oct 10, 2025" or "Sold 10/10/25"
+  const soldMatch = text.match(
+    /Sold\s+([A-Za-z]{3}\s+\d{1,2},\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i
+  );
+  if (!soldMatch) return "";
+  const raw = soldMatch[1];
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString();
 }
 
-async function web_search(query: string): Promise<SearchResult[]> {
-  try {
-    const response = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": TAVILY_API_KEY!,
-      },
-      body: JSON.stringify({ query, max_results: 6 }),
-    });
-    const payload: unknown = await response.json();
-    const results =
-      payload && typeof payload === "object"
-        ? (payload as { results?: unknown }).results
-        : undefined;
-    return parseSearchResults(results);
-  } catch (err) {
-    console.error("[agent] tavily error:", err);
-    return [];
-  }
+function withinRange(iso: string | undefined, from?: string, to?: string) {
+  if (!iso) return true; // if unknown, allow; estimator and UI can note sparsity
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return true;
+  if (from && t < Date.parse(from)) return false;
+  if (to && t > Date.parse(to)) return false;
+  return true;
 }
 
-async function web_fetch(url: string) {
-  const html = await fetch(url, {
-    headers: { "user-agent": "Mozilla/5.0 card-price-agent" },
-  }).then((x) => x.text());
-  const $ = cheerio.load(html);
-  const text = $("body").text().replace(/\s+/g, " ").trim().slice(0, 150000);
-  return { url, text };
+function matchesGrade(title: string, grade?: string) {
+  if (!grade) return true;
+  const g = grade.toLowerCase();
+  const t = (title || "").toLowerCase();
+  return t.includes(g);
+}
+
+function dedupeByUrl<T extends { url: string }>(arr: T[]) {
+  const seen = new Set<string>();
+  return arr.filter((x) => {
+    if (!x.url) return false;
+    const key = x.url.split("?")[0]; // strip query params for dedupe
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function groupByWeek(sales: { soldAt: string; price: number }[]) {
@@ -153,26 +105,96 @@ function groupByWeek(sales: { soldAt: string; price: number }[]) {
     .sort((a, b) => a.week.localeCompare(b.week));
 }
 
-const SYSTEM = `
-You are CardPriceAgent.
-Estimate today's value of any trading card (Pokémon, MTG, sports) using RECENT SOLD prices from public pages.
-Steps:
-- Reformulate a precise search (set, number, grade/condition, date range).
-- From search, pick 2–4 promising sources (eBay sold results, TCGplayer market/sales, Cardmarket sold pages, auction results).
-- Extract SOLD comps with: title, price, currency, sold date (ISO if present), URL; ignore lots/bundles/proxy/damaged unless asked; respect dateFrom/dateTo.
-- Convert prices to USD (assume USD if unclear). Merge & dedupe by URL. If user specifies grade, prefer graded comps; otherwise separate graded vs raw if mixed.
-- Return JSON ONLY: { "sales": [...], "citations": [urls...] } (no prose).
-`;
+/* ---------------------------- eBay SOLD Scraper --------------------------- */
+
+function buildEbaySoldUrl(query: string, grade?: string) {
+  // Build a Completed + Sold listings search, sort by "End date, recent first".
+  // _sop=13 => Best Match? We can omit or change to 12 (End date: newest first) but eBay sometimes ignores sop values.
+  const kw = [query, grade].filter(Boolean).join(" ");
+  const params = new URLSearchParams({
+    _nkw: kw,
+    LH_Sold: "1",
+    LH_Complete: "1",
+    // _sop: "12",
+    // Category filters could be added if needed.
+  });
+  return `https://www.ebay.com/sch/i.html?${params.toString()}`;
+}
+
+async function fetchEbaySold(
+  query: string,
+  dateFrom?: string,
+  dateTo?: string,
+  grade?: string
+): Promise<Sale[]> {
+  const url = buildEbaySoldUrl(query, grade);
+  const html = await fetch(url, {
+    headers: { "user-agent": "Mozilla/5.0 card-price-agent" },
+  }).then((x) => x.text());
+
+  const $ = cheerio.load(html);
+  const items: Sale[] = [];
+
+  $("li.s-item").each((_, el) => {
+    const $el = $(el);
+
+    const title = $el.find(".s-item__title").text().trim();
+    const link = $el.find("a.s-item__link").attr("href") || "";
+    const priceText = $el.find(".s-item__price").first().text().trim();
+    const shipText = $el
+      .find(".s-item__shipping, .s-item__logisticsCost")
+      .first()
+      .text()
+      .trim();
+    // Date sometimes appears near captions:
+    const captionText = $el
+      .find(".s-item__caption--time-end, .s-item__title--tag, .s-item__caption")
+      .text();
+
+    // Validate USD
+    if (!parseUsd(priceText)) return;
+
+    const price = parsePrice(priceText);
+    if (!price || price <= 0 || price >= 100000) return;
+
+    const shipping = parsePrice(shipText) || undefined;
+    const soldAt = parseSoldDate(captionText) || ""; // may be empty if eBay omits it
+
+    const sale: Sale = {
+      source: "ebay",
+      title,
+      price,
+      currency: "USD",
+      url: link,
+      soldAt,
+      shipping,
+    };
+
+    // Grade + date filters here to reduce junk early
+    if (!matchesGrade(title, grade)) return;
+    if (!withinRange(sale.soldAt, dateFrom, dateTo)) return;
+
+    // Basic quality checks
+    const lower = title.toLowerCase();
+    if (
+      lower.includes("lot of") ||
+      lower.includes("bundle") ||
+      lower.includes("proxy") ||
+      lower.includes("damaged")
+    ) {
+      return;
+    }
+
+    items.push(sale);
+  });
+
+  return dedupeByUrl(items);
+}
+
+/* --------------------------------- Handler -------------------------------- */
 
 export async function POST(req: NextRequest) {
   try {
-    if (!OPENAI_API_KEY || !TAVILY_API_KEY) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY or TAVILY_API_KEY" },
-        { status: 500 }
-      );
-    }
-
     const { query, dateFrom, dateTo, grade } = await req.json();
 
     const q = (query || "").toString().trim();
@@ -183,90 +205,26 @@ export async function POST(req: NextRequest) {
         timeseries: [],
         citations: [],
         notes:
-          "Please enter a specific card (set, number, and optional grade).",
+          "Please enter a specific card (e.g., 'Giratina V 186/196 Lost Origin PSA 10').",
       });
     }
 
-    // 1) initial search
-    const searchQ = [
-      q,
-      grade,
-      dateFrom && `since:${dateFrom}`,
-      dateTo && `to:${dateTo}`,
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const results = await web_search(searchQ);
+    // 1) Fetch deterministic SOLD comps from eBay
+    const sales = await fetchEbaySold(q, dateFrom, dateTo, grade);
 
-    // 2) fetch pages
-    const pages: Array<{ url: string; text: string }> = [];
-    for (const r of results.slice(0, 4)) {
-      try {
-        pages.push(await web_fetch(r.url));
-      } catch (e) {
-        console.warn("[agent] fetch failed:", r.url, e);
-      }
+    // 2) Short-circuit if not enough comps
+    if (sales.length < 3) {
+      return NextResponse.json({
+        worth: { median: null, range: null, count: sales.length },
+        sales,
+        timeseries: [],
+        citations: Array.from(new Set(sales.map((s) => s.url))).slice(0, 6),
+        notes:
+          "Not enough trustworthy SOLD comps on eBay. Try adding set & number (e.g., 'Giratina V 186/196'), relaxing grade, or widening the date range.",
+      });
     }
 
-    // 3) Call OpenAI via REST (no SDK)
-    const completion = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          temperature: 0.2,
-          messages: [
-            { role: "system", content: SYSTEM },
-            {
-              role: "user",
-              content: JSON.stringify({
-                query: q,
-                dateFrom,
-                dateTo,
-                grade,
-                pages: pages.map((p) => ({
-                  url: p.url,
-                  text: p.text.slice(0, 50000),
-                })),
-              }),
-            },
-          ],
-        }),
-      }
-    ).then((r) => r.json());
-
-    let sales: Sale[] = [];
-    let citations: string[] = [];
-
-    try {
-      const content = completion?.choices?.[0]?.message?.content as
-        | string
-        | undefined;
-      const data = safeJson<ModelResponsePayload>(content);
-
-      if (Array.isArray(data?.sales) && data.sales.length) {
-        sales = data.sales
-          .map((raw) => normalizeSale(raw))
-          .filter((sale): sale is Sale => sale !== null);
-      }
-
-      const citationList = Array.isArray(data?.citations)
-        ? data.citations.filter(
-            (item): item is string => typeof item === "string"
-          )
-        : [];
-      citations = Array.from(new Set<string>(citationList));
-    } catch (e) {
-      console.error("[agent] parse step failed:", e);
-      citations = results.slice(0, 4).map((r: { url: string }) => r.url);
-    }
-
-    // 4) estimate — use absolute URL derived from the request
+    // 3) Estimate median and range using your existing estimator
     const origin = new URL(req.url).origin;
     const est = await fetch(`${origin}/api/estimate`, {
       method: "POST",
@@ -274,13 +232,16 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({ sales }),
     }).then((r) => r.json());
 
-    // 5) time series
+    // 4) Chart data (weekly median)
     const timeseries = groupByWeek(
       sales.map((s) => ({
         soldAt: s.soldAt,
         price: s.price + (s.shipping || 0),
       }))
     );
+
+    // 5) Citations: use the eBay item URLs we actually parsed
+    const citations = Array.from(new Set(sales.map((s) => s.url))).slice(0, 6);
 
     return NextResponse.json({
       worth: {
@@ -290,11 +251,8 @@ export async function POST(req: NextRequest) {
       },
       sales: sales.slice(0, 50),
       timeseries,
-      citations: citations.slice(0, 6),
-      notes:
-        sales.length < 3
-          ? "Sparse data; try a more specific card (set/number/grade) or widen the date range."
-          : undefined,
+      citations,
+      notes: undefined,
     });
   } catch (err) {
     console.error("[agent] unhandled error:", err);
