@@ -1,15 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 
-type Sale = {
-  source: "ebay" | "tcgplayer" | "cardmarket" | "stockx" | "scrape";
-  title: string;
-  price: number;
-  currency: string;
-  url: string;
-  soldAt: string;
-  shipping?: number;
-};
-
 function trimmedStats(nums: number[], trim = 0.1) {
   const s = nums.slice().sort((a, b) => a - b);
   const k = Math.floor(s.length * trim);
@@ -21,9 +11,10 @@ function trimmedStats(nums: number[], trim = 0.1) {
   return { median, p20, p80 };
 }
 
+type Sale = { price: number; shipping?: number };
+
 export async function POST(req: NextRequest) {
   const { sales } = (await req.json()) as { sales: Sale[] };
-
   const cleanedTotals: number[] = (sales ?? [])
     .filter((s) => s && s.price > 0 && s.price < 1_000_000)
     .map((s) => s.price + (s.shipping ?? 0));
@@ -37,7 +28,5 @@ export async function POST(req: NextRequest) {
   }
 
   const { median, p20, p80 } = trimmedStats(cleanedTotals, 0.1);
-  const range: [number, number] = [p20, p80];
-
-  return NextResponse.json({ median, range });
+  return NextResponse.json({ median, range: [p20, p80] as [number, number] });
 }
