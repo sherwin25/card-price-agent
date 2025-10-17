@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
+type ResolveBody = { query: string };
+
 export async function POST(req: NextRequest) {
-  const { query } = await req.json();
-  // TODO: call Scryfall / Pokémon TCG APIs; for now return a mock
+  const { query } = (await req.json()) as ResolveBody;
   return NextResponse.json({
     cardId: "mock-123",
     name: query,

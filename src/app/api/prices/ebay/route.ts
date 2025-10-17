@@ -1,8 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
+
+type Sale = {
+  source: "ebay";
+  title: string;
+  price: number;
+  currency: string;
+  url: string;
+  soldAt: string;
+  shipping?: number;
+};
+
 export async function POST(req: NextRequest) {
-  const { dateFrom, dateTo } = await req.json();
-  // TODO: eBay Browse/Buy API; mock a few SOLD comps in the date window
-  const sales = [
+  const { dateFrom, dateTo } = (await req.json()) as {
+    dateFrom?: string;
+    dateTo?: string;
+  };
+
+  const sales: Sale[] = [
     {
       source: "ebay",
       title: "PSA 8 Charizard",
@@ -28,5 +42,6 @@ export async function POST(req: NextRequest) {
       soldAt: "2025-08-28",
     },
   ];
+
   return NextResponse.json({ sales });
 }

@@ -1,27 +1,58 @@
 "use client";
 import { useState } from "react";
 
+type Sale = {
+  source: "ebay" | "tcgplayer" | "cardmarket" | "stockx" | "scrape";
+  title: string;
+  price: number;
+  currency: string;
+  url: string;
+  soldAt: string;
+  shipping?: number;
+};
+
+type ResolveResp = {
+  cardId: string;
+  name: string;
+  set: string;
+  number: string;
+  printing: string;
+  image: string;
+};
+
+type EstimateResp = {
+  median: number | null;
+  range: [number, number] | null;
+  message?: string;
+};
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [grade, setGrade] = useState("");
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<{
+    card: ResolveResp;
+    est: EstimateResp;
+    samples: Sale[];
+  } | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function onSubmit() {
     setLoading(true);
     setResult(null);
     try {
-      // 1) resolve card
-      const card = await fetch("/api/resolve", {
+      const card: ResolveResp = await fetch("/api/resolve", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ query }),
       }).then((r) => r.json());
 
-      // 2) fetch mock prices from three sources (we’ll wire APIs later)
-      const [ebay, tcg, cm] = await Promise.all([
+      const [ebay, tcg, cm]: [
+        { sales: Sale[] },
+        { sales: Sale[] },
+        { sales: Sale[] }
+      ] = await Promise.all([
         fetch("/api/prices/ebay", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -54,14 +85,13 @@ export default function Home() {
         }).then((r) => r.json()),
       ]);
 
-      const sales = [
-        ...(ebay.sales || []),
-        ...(tcg.sales || []),
-        ...(cm.sales || []),
+      const sales: Sale[] = [
+        ...(ebay.sales ?? []),
+        ...(tcg.sales ?? []),
+        ...(cm.sales ?? []),
       ];
 
-      // 3) estimate
-      const est = await fetch("/api/estimate", {
+      const est: EstimateResp = await fetch("/api/estimate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sales }),
@@ -75,6 +105,7 @@ export default function Home() {
 
   return (
     <main className="mx-auto max-w-5xl p-6 grid md:grid-cols-2 gap-6">
+      {/* left pane: form */}
       <section className="space-y-4">
         <h1 className="text-2xl font-semibold">Card Price Agent</h1>
         <p className="text-sm opacity-80">
@@ -127,13 +158,14 @@ export default function Home() {
         </button>
       </section>
 
+      {/* right pane: results */}
       <section className="border rounded p-3 space-y-3">
         {!result ? (
           <div className="opacity-70 text-sm">Results will appear here.</div>
         ) : (
           <div className="space-y-2">
             <h2 className="text-lg font-semibold">Today’s worth</h2>
-            {result.est.median ? (
+            {result.est.median !== null && result.est.range ? (
               <div>
                 ${result.est.median} (20–80%: ${result.est.range[0]} – $
                 {result.est.range[1]})
@@ -141,9 +173,10 @@ export default function Home() {
             ) : (
               <div>Not enough comps.</div>
             )}
+
             <h3 className="font-medium mt-4">Sample comps</h3>
             <ul className="list-disc pl-5 text-sm">
-              {result.samples.map((s: any, i: number) => (
+              {result.samples.map((s: Sale, i: number) => (
                 <li key={i}>
                   <a className="underline" href={s.url} target="_blank">
                     {s.title}
