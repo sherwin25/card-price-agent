@@ -5,10 +5,34 @@ import { NextRequest, NextResponse } from "next/server";
 
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
-type TavilyResult = {
+type TavilyUiResult = {
   title: string;
   url: string;
   content?: string; // snippet
+};
+
+type SearchPayload = {
+  query: string;
+  maxResults?: number;
+  includeDomains?: string[];
+};
+
+type TavilyRequestBody = {
+  api_key: string;
+  query: string;
+  max_results: number;
+  search_depth: "advanced";
+  include_domains?: string[];
+};
+
+type TavilyApiResult = {
+  title?: string;
+  url?: string;
+  content?: string;
+};
+
+type TavilyApiResponse = {
+  results?: TavilyApiResult[];
 };
 
 export async function POST(req: NextRequest) {
@@ -20,15 +44,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { query, maxResults = 8, includeDomains = [] } = await req.json();
+    const {
+      query,
+      maxResults = 8,
+      includeDomains = [],
+    } = (await req.json()) as SearchPayload;
 
     const q = (query || "").toString().trim();
     if (!q) {
       return NextResponse.json({ results: [] });
     }
 
-    const body: Record<string, any> = {
-      api_key: TAVILY_API_KEY, // <-- key must be in the body
+    const body: TavilyRequestBody = {
+      api_key: TAVILY_API_KEY,
       query: q,
       max_results: Math.max(1, Math.min(Number(maxResults) || 8, 20)),
       search_depth: "advanced",
@@ -53,13 +81,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const data = JSON.parse(txt);
-    const results: TavilyResult[] = Array.isArray(data?.results)
-      ? data.results.map((r: any) => ({
-          title: String(r.title || "").slice(0, 200),
-          url: String(r.url || ""),
-          content: r.content ? String(r.content).slice(0, 400) : undefined,
-        }))
+    const data = JSON.parse(txt) as TavilyApiResponse;
+
+    const results: TavilyUiResult[] = Array.isArray(data?.results)
+      ? data.results.map(
+          (r): TavilyUiResult => ({
+            title: String(r.title ?? "").slice(0, 200),
+            url: String(r.url ?? ""),
+            content: r.content ? String(r.content).slice(0, 400) : undefined,
+          })
+        )
       : [];
 
     return NextResponse.json({ results });
