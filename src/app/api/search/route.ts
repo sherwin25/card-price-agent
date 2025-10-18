@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { query, maxResults = 8 } = (await req.json()) as SearchPayload;
+    const { query, maxResults = MAX_RESULTS } = (await req.json()) as SearchPayload;
     const q = (query || "").toString().trim();
 
     if (!q) {
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
     const body: TavilyRequestBody = {
       api_key: tavilyApiKey,
       query: q,
-      max_results: Math.max(1, Math.min(Number(maxResults) || 8, 20)),
+      max_results: Math.max(1, Math.min(Number(maxResults) || MAX_RESULTS, MAX_RESULTS)),
       search_depth: "advanced",
       include_domains: TRUSTED_DOMAINS,
     };
@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
     const data = JSON.parse(txt) as TavilyApiResponse;
 
     const results: TavilyUiResult[] = Array.isArray(data?.results)
-      ? data.results.map(
+      ? data.results.slice(0, MAX_RESULTS).map(
           (r): TavilyUiResult => ({
             title: String(r.title ?? "").slice(0, 200),
             url: String(r.url ?? ""),
@@ -176,3 +176,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unexpected failure" }, { status: 500 });
   }
 }
+const MAX_RESULTS = 15;
