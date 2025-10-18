@@ -3,7 +3,15 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+function getTavilyApiKey() {
+  const keyCandidates = [
+    process.env.TAVILY_API_KEY,
+    process.env.TAVILY_KEY,
+    process.env.NEXT_PUBLIC_TAVILY_API_KEY,
+  ];
+
+  return keyCandidates.find((k) => typeof k === "string" && k.trim().length > 0);
+}
 
 /* ------------ Types ------------ */
 type TavilyUiResult = { title: string; url: string; content?: string };
@@ -98,9 +106,13 @@ function looksLikeCardQuery(q: string): boolean {
 
 export async function POST(req: NextRequest) {
   try {
-    if (!TAVILY_API_KEY) {
+    const tavilyApiKey = getTavilyApiKey();
+    if (!tavilyApiKey) {
       return NextResponse.json(
-        { error: "Missing TAVILY_API_KEY" },
+        {
+          error:
+            "Missing Tavily API key. Set TAVILY_API_KEY (or TAVILY_KEY) in your environment.",
+        },
         { status: 500 }
       );
     }
@@ -124,7 +136,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body: TavilyRequestBody = {
-      api_key: TAVILY_API_KEY,
+      api_key: tavilyApiKey,
       query: q,
       max_results: Math.max(1, Math.min(Number(maxResults) || 8, 20)),
       search_depth: "advanced",
