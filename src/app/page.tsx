@@ -1,197 +1,153 @@
 "use client";
 
 import { useState } from "react";
-import PriceChart from "@/components/PriceChart";
 
-type Sale = {
-  title: string;
-  url: string;
-  price: number;
-  shipping?: number;
-  soldAt: string;
-};
+type TavilyResult = { title: string; url: string; content?: string };
 
-type TimePoint = { week: string; median: number; n: number };
-
-type AgentWorth = {
-  median: number | null;
-  range: [number, number] | null;
-  count: number;
-};
-
-type AgentResult = {
-  worth: AgentWorth;
-  sales: Sale[];
-  timeseries: TimePoint[];
-  citations: string[];
-  notes?: string;
-};
+function looksLikeCardQueryClient(q: string): boolean {
+  const s = q.toLowerCase();
+  const mustInclude = [
+    "psa",
+    "bgs",
+    "cgc",
+    "tcgplayer",
+    "cardmarket",
+    "ebay",
+    "rc",
+    "rookie",
+    "holo",
+    "hollow",
+    "refractor",
+    "parallel",
+    "auto",
+    "patch",
+    "alt art",
+    "pokemon",
+    "pokémon",
+    "yugioh",
+    "yu-gi-oh",
+    "mtg",
+    "magic",
+    "topps",
+    "panini",
+    "upper deck",
+    "nba",
+    "nfl",
+    "mlb",
+    "nhl",
+    "fifa",
+    "world cup",
+  ];
+  const numberLike = /(^|\s)(\d{1,3}\/\d{1,3}|#?\d{1,4})(\s|$)/;
+  const hasToken = mustInclude.some((t) => s.includes(t));
+  const hasNumber = numberLike.test(s);
+  return hasToken || hasNumber;
+}
 
 export default function Home() {
   const [query, setQuery] = useState<string>("");
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
-  const [grade, setGrade] = useState<string>("");
-  const [result, setResult] = useState<AgentResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [results, setResults] = useState<TavilyResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  async function askAgent() {
+  async function handleSearch() {
+    const q = query.trim();
+    if (!q) return;
+
+    // Client-side guard for fast feedback (API also validates)
+    if (!looksLikeCardQueryClient(q)) {
+      setError(
+        "This tool only searches trading cards. Try something like “Giratina V 186/196 PSA 10” or “Ohtani Topps Chrome #150 PSA 9”."
+      );
+      setResults([]);
+      return;
+    }
+
     setLoading(true);
     setError(null);
-    setResult(null);
+    setResults([]);
 
     try {
-      const res = await fetch("/api/agent", {
+      const res = await fetch("/api/search", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query, dateFrom, dateTo, grade }),
+        body: JSON.stringify({ query: q }),
       });
 
+      const data = await res.json();
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || "Request failed");
+        setError(
+          typeof data?.error === "string"
+            ? data.error
+            : `Search failed (${res.status})`
+        );
+        setResults([]);
+        return;
       }
 
-      const data = (await res.json()) as AgentResult;
-      setResult(data);
+      setResults((data?.results as TavilyResult[]) ?? []);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Something went wrong";
+      const msg = e instanceof Error ? e.message : "Unknown error";
       setError(msg);
     } finally {
       setLoading(false);
     }
   }
 
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") void handleSearch();
+  }
+
   return (
-    <main className="mx-auto max-w-5xl p-6 grid md:grid-cols-2 gap-6">
-      <section className="space-y-4">
-        <h1 className="text-2xl font-semibold">Card Price Agent</h1>
-        <p className="text-sm opacity-80">
-          Ask about any card’s value; the agent searches public sold comps and
-          charts history.
-        </p>
+    <main className="max-w-2xl mx-auto p-6 text-center space-y-6">
+      <h1 className="text-2xl font-semibold">Card Price Search</h1>
+      <p className="text-sm opacity-80">
+        Search is restricted to trading cards (Pokémon, MTG, sports). Example:{" "}
+        <span className="italic">Giratina V 186/196 PSA 10</span>.
+      </p>
 
-        <label className="block text-sm">Card search</label>
+      <div className="flex gap-2">
         <input
-          className="w-full border rounded p-2"
-          placeholder="1999 Pokémon Base Set Charizard #4 Holo, PSA 8"
+          type="text"
+          placeholder="e.g. 2022 Giratina V 186/196 Lost Origin PSA 10"
           value={query}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-            setQuery(e.target.value)
-          }
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onKeyDown}
+          className="flex-1 border rounded p-2"
         />
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm">From</label>
-            <input
-              type="date"
-              className="w-full border rounded p-2"
-              value={dateFrom}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                setDateFrom(e.target.value)
-              }
-            />
-          </div>
-          <div>
-            <label className="block text-sm">To</label>
-            <input
-              type="date"
-              className="w-full border rounded p-2"
-              value={dateTo}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                setDateTo(e.target.value)
-              }
-            />
-          </div>
-        </div>
-
-        <label className="block text-sm">Grade (optional)</label>
-        <input
-          className="w-full border rounded p-2"
-          placeholder="PSA 9, CGC 9, or 'raw'"
-          value={grade}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-            setGrade(e.target.value)
-          }
-        />
-
         <button
-          className="rounded bg-black text-white px-4 py-2"
-          onClick={askAgent}
+          className="bg-black text-white rounded px-4"
+          onClick={handleSearch}
           disabled={loading}
         >
-          {loading ? "Working..." : "Ask Agent"}
+          {loading ? "Searching..." : "Search"}
         </button>
+      </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
-      </section>
+      {error && <p className="text-red-500 text-sm">{error}</p>}
 
-      <section className="border rounded p-3 space-y-3">
-        {!result ? (
-          <div className="opacity-70 text-sm">Results will appear here.</div>
+      <section className="text-left space-y-3 border rounded p-4">
+        {loading ? (
+          <p className="opacity-70">Searching…</p>
+        ) : results.length === 0 ? (
+          <p className="opacity-70 text-sm">No results yet.</p>
         ) : (
-          <div className="space-y-3">
-            <div className="text-lg">
-              {result.worth.median !== null && result.worth.range ? (
-                <>
-                  Today’s Worth: <b>${result.worth.median}</b> (20–80%: $
-                  {result.worth.range[0]} – ${result.worth.range[1]})
-                </>
-              ) : (
-                <>Not enough comps.</>
+          results.map((r) => (
+            <div key={r.url} className="border-b pb-2">
+              <a
+                href={r.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-blue-500 underline"
+              >
+                {r.title || r.url}
+              </a>
+              {r.content && (
+                <p className="text-sm opacity-80 mt-1">{r.content}</p>
               )}
-              <div className="text-sm opacity-70">
-                Comps used: {result.worth.count}
-              </div>
+              <p className="text-xs opacity-60 mt-1">{r.url}</p>
             </div>
-
-            <PriceChart data={result.timeseries} />
-
-            <h3 className="font-medium">Recent comps</h3>
-            <ul className="list-disc pl-5 text-sm">
-              {result.sales.slice(0, 8).map((s, i) => (
-                <li key={i}>
-                  <a
-                    className="underline"
-                    href={s.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {s.title}
-                  </a>{" "}
-                  — ${s.price}
-                  {s.shipping ? ` + ${s.shipping} ship` : ``} (
-                  {s.soldAt ? s.soldAt.slice(0, 10) : "date n/a"})
-                </li>
-              ))}
-            </ul>
-
-            {result.citations?.length ? (
-              <>
-                <h4 className="font-medium mt-2">Sources</h4>
-                <ul className="list-disc pl-5 text-sm">
-                  {result.citations.map((u) => (
-                    <li key={u}>
-                      <a
-                        className="underline"
-                        href={u}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {u}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : null}
-
-            {result.notes && (
-              <p className="text-xs opacity-70">{result.notes}</p>
-            )}
-          </div>
+          ))
         )}
       </section>
     </main>

@@ -5,16 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
 
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
-type TavilyUiResult = {
-  title: string;
-  url: string;
-  content?: string; // snippet
-};
+/* ------------ Types ------------ */
+type TavilyUiResult = { title: string; url: string; content?: string };
 
 type SearchPayload = {
   query: string;
   maxResults?: number;
-  includeDomains?: string[];
 };
 
 type TavilyRequestBody = {
@@ -22,7 +18,7 @@ type TavilyRequestBody = {
   query: string;
   max_results: number;
   search_depth: "advanced";
-  include_domains?: string[];
+  include_domains: string[];
 };
 
 type TavilyApiResult = {
@@ -35,6 +31,71 @@ type TavilyApiResponse = {
   results?: TavilyApiResult[];
 };
 
+/* ----------- Constants ---------- */
+
+// Only allow these hosts (and their subdomains)
+const TRUSTED_DOMAINS: string[] = [
+  "ebay.com",
+  "tcgplayer.com",
+  "cardmarket.com",
+  "pwccmarketplace.com",
+  "goldinauctions.com",
+  "ha.com", // Heritage
+];
+
+/** Heuristic: does the user query look like a trading-card query? */
+function looksLikeCardQuery(q: string): boolean {
+  const s = q.toLowerCase();
+
+  // Must include at least one of these “card-ish” tokens
+  const mustInclude = [
+    // grading & marketplaces
+    "psa",
+    "bgs",
+    "cgc",
+    "tcgplayer",
+    "cardmarket",
+    "ebay",
+    // common card terms
+    "rc",
+    "rookie",
+    "holo",
+    "hollow",
+    "refractor",
+    "parallel",
+    "auto",
+    "patch",
+    "alt art",
+    // franchises
+    "pokemon",
+    "pokémon",
+    "yugioh",
+    "yu-gi-oh",
+    "mtg",
+    "magic",
+    "topps",
+    "panini",
+    "upper deck",
+    "nba",
+    "nfl",
+    "mlb",
+    "nhl",
+    "fifa",
+    "world cup",
+  ];
+
+  // And at least one detail-like pattern (set number or card #)
+  const numberLike = /(^|\s)(\d{1,3}\/\d{1,3}|#?\d{1,4})(\s|$)/; // e.g., 186/196 or #150 or 150
+
+  const hasCardToken = mustInclude.some((t) => s.includes(t));
+  const hasNumberish = numberLike.test(s);
+
+  // Require card token; number is helpful but not mandatory for broader queries
+  return hasCardToken || hasNumberish;
+}
+
+/* ----------- Handler ------------ */
+
 export async function POST(req: NextRequest) {
   try {
     if (!TAVILY_API_KEY) {
@@ -44,15 +105,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const {
-      query,
-      maxResults = 8,
-      includeDomains = [],
-    } = (await req.json()) as SearchPayload;
-
+    const { query, maxResults = 8 } = (await req.json()) as SearchPayload;
     const q = (query || "").toString().trim();
+
     if (!q) {
       return NextResponse.json({ results: [] });
+    }
+
+    // Hard filter: only card-related searches are allowed
+    if (!looksLikeCardQuery(q)) {
+      return NextResponse.json(
+        {
+          error:
+            "This search is restricted to trading cards. Try something like “Giratina V 186/196 PSA 10” or “Shohei Ohtani Topps Chrome #150 PSA 9”.",
+        },
+        { status: 400 }
+      );
     }
 
     const body: TavilyRequestBody = {
@@ -60,11 +128,8 @@ export async function POST(req: NextRequest) {
       query: q,
       max_results: Math.max(1, Math.min(Number(maxResults) || 8, 20)),
       search_depth: "advanced",
+      include_domains: TRUSTED_DOMAINS,
     };
-
-    if (Array.isArray(includeDomains) && includeDomains.length) {
-      body.include_domains = includeDomains;
-    }
 
     const res = await fetch("https://api.tavily.com/search", {
       method: "POST",
