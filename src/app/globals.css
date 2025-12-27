@@ -22,8 +22,13 @@
 body {
   font-family: "Inter", Arial, Helvetica, sans-serif;
   background: radial-gradient(circle at top, #d9efff, #fef6ff);
+  background-attachment: fixed; /* Prevent background scroll jitter */
   color: #0f172a;
   min-height: 100vh;
+  /* Mobile Optimizations */
+  min-height: 100dvh;
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
   line-height: 1.5;
   transition: background 0.6s ease, color 0.6s ease;
 }
