@@ -148,7 +148,7 @@ export default function Home() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={onKeyDown}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-5 py-3 text-base shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
                 />
               </div>
               <button
